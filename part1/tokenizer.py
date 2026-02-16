@@ -82,9 +82,83 @@ class Tokenizer:
             return tokens
         
         # TODO: Implement BPE algorithm
-        # Return tokens
+        while True:
+            # 1. Get all adjacent pairs in the current token list
+            pairs = self._get_pairs(tokens)
+            if not pairs:
+                break
+                
+            # 2. Filter pairs to only those whose merged result exists in our vocabulary
+            valid_pairs = [p for p in pairs if (p[0] + p[1]) in self.inverse_vocab]
+            
+            # If no pairs can be merged, we are done
+            if not valid_pairs:
+                break
+                
+            # 3. Find the pair whose merged result has the lowest vocab rank (lowest token ID)
+            # This directly aligns with tiktoken/GPT-2 logic
+            best_pair = min(valid_pairs, key=lambda p: self.inverse_vocab[p[0] + p[1]])
+            
+            # 4. Merge all occurrences of that pair
+            new_tokens = []
+            i = 0
+            while i < len(tokens):
+                # If we find the best_pair, merge them and skip the next token
+                if i < len(tokens) - 1 and tokens[i] == best_pair[0] and tokens[i + 1] == best_pair[1]:
+                    new_tokens.append(best_pair[0] + best_pair[1])
+                    i += 2
+                else:
+                    new_tokens.append(tokens[i])
+                    i += 1
+                    
+            tokens = new_tokens
+            
+        return tokens
+
+    def _bpe(self, token_bytes: bytes) -> list[bytes]:
+        """
+        Apply BPE to a single token (sequence of bytes).
+        Returns a list of merged byte sequences.
+        """
+        # Start with individual bytes
+        tokens = [bytes([b]) for b in token_bytes]
         
-        raise NotImplementedError("Implement _bpe")
+        if len(tokens) <= 1:
+            return tokens
+        
+        while True:
+            # 1. Get all adjacent pairs in the current token list
+            pairs = self._get_pairs(tokens)
+            if not pairs:
+                break
+                
+            # 2. Filter pairs to only those whose merged result exists in our vocabulary
+            valid_pairs = [p for p in pairs if (p[0] + p[1]) in self.inverse_vocab]
+            
+            # If no pairs can be merged, we are done
+            if not valid_pairs:
+                break
+                
+            # 3. Find the pair whose merged result has the lowest vocab rank (lowest token ID)
+            # This directly aligns with tiktoken/GPT-2 logic
+            best_pair = min(valid_pairs, key=lambda p: self.inverse_vocab[p[0] + p[1]])
+            
+            # 4. Merge all occurrences of that pair
+            new_tokens = []
+            i = 0
+            while i < len(tokens):
+                # If we find the best_pair, merge them and skip the next token
+                if i < len(tokens) - 1 and tokens[i] == best_pair[0] and tokens[i + 1] == best_pair[1]:
+                    new_tokens.append(best_pair[0] + best_pair[1])
+                    i += 2
+                else:
+                    new_tokens.append(tokens[i])
+                    i += 1
+                    
+            tokens = new_tokens
+            
+        return tokens
+        # raise NotImplementedError("Implement _bpe")
 
     def _split_with_special_tokens(self, text: str) -> list[tuple[str, bool]]:
         """
@@ -140,8 +214,24 @@ class Tokenizer:
         
         ids = []
         # TODO: Implement encoding
-        
-        raise NotImplementedError("Implement _encode_chunk")
+        # 1. Use regex pattern to split text into pre-tokens
+        for match in self.pat.finditer(text):
+            chunk = match.group()
+            
+            # 2a. Convert to bytes
+            chunk_bytes = chunk.encode("utf-8")
+            
+            # 2b. Apply BPE to get list of byte sequences
+            bpe_tokens = self._bpe(chunk_bytes)
+            
+            # 2c. Convert each byte sequence to token ID using inverse_vocab
+            for bpe_token in bpe_tokens:
+                # 2d. Unknown tokens are intrinsically handled because we start 
+                # with single bytes (all 256 of which exist in the vocabulary).
+                ids.append(self.inverse_vocab[bpe_token])
+                
+        return ids
+        # raise NotImplementedError("Implement _encode_chunk")
 
     def encode(self, text: str) -> list[int]:
         """
@@ -189,9 +279,20 @@ class Tokenizer:
         if not ids:
             return ""
         
-        # TODO: Implement decoding
+        # TODO: Implement decoding        
+        # 1. Look up corresponding bytes in vocab
+        byte_chunks = []
+        for token_id in ids:
+            # Safely handle missing IDs by ignoring them (or you could raise an error)
+            if token_id in self.vocab:
+                byte_chunks.append(self.vocab[token_id])
+                
+        # 2. Concatenate all byte chunks
+        full_bytes = b"".join(byte_chunks)
         
-        raise NotImplementedError("Implement decode")
+        # 3. Decode as UTF-8 with errors="replace"
+        return full_bytes.decode("utf-8", errors="replace")
+        # raise NotImplementedError("Implement decode")
 
     def encode_iterable(self, iterable: Iterator[str]) -> Iterator[int]:
         """

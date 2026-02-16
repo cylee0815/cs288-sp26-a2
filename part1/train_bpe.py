@@ -12,6 +12,10 @@ from collections import Counter
 from pathlib import Path
 from typing import Iterator
 
+import argparse
+import json
+from pathlib import Path
+
 
 # GPT-2 pre-tokenization pattern
 GPT2_PAT = re.compile(
@@ -194,5 +198,174 @@ def train_bpe(
             forbidden_substrings.add(special_bytes[:i])
     
     # TODO: Implement BPE training
+    # ---------------------------------------------------------
+    # 1. VOCABULARY INITIALIZATION
+    # ---------------------------------------------------------
+    vocab: dict[int, bytes] = {}
+    idx = 0
     
-    raise NotImplementedError("Implement train_bpe")
+    # Add special tokens first
+    for st in special_tokens:
+        vocab[idx] = st.encode("utf-8")
+        idx += 1
+        
+    # Add all 256 single-byte values
+    for b in range(256):
+        vocab[idx] = bytes([b])
+        idx += 1
+
+    # Read the corpus
+    with open(input_path, encoding="utf-8") as f:
+        text = f.read()
+    
+    # Build set of "forbidden" substrings from special tokens
+    forbidden_substrings = set()
+    for special in special_tokens:
+        special_bytes = special.encode("utf-8")
+        for i in range(2, len(special_bytes) + 1):
+            forbidden_substrings.add(special_bytes[:i])
+            
+    # ---------------------------------------------------------
+    # 2. WORD FREQUENCY COUNTING
+    # ---------------------------------------------------------
+    word_freqs: Counter[tuple[bytes, ...]] = Counter()
+    
+    for token_str in pre_tokenize(text, special_tokens):
+        if token_str in special_tokens:
+            continue  # Skip special tokens in BPE merging
+            
+        token_bytes = token_str.encode("utf-8")
+        
+        # Check for forbidden substrings
+        has_forbidden = False
+        for i in range(len(token_bytes)):
+            for j in range(i + 2, len(token_bytes) + 1):
+                if token_bytes[i:j] in forbidden_substrings:
+                    has_forbidden = True
+                    break
+            if has_forbidden:
+                break
+                
+        if has_forbidden:
+            continue
+            
+        # Represent as tuple of single bytes
+        word_tuple = tuple(bytes([b]) for b in token_bytes)
+        word_freqs[word_tuple] += 1
+
+    # ---------------------------------------------------------
+    # 3 & 4. PAIR FREQUENCY COUNTING & MERGE LOOP
+    # ---------------------------------------------------------
+    merges: list[tuple[bytes, bytes]] = []
+    
+    while len(vocab) < vocab_size:
+        # Count pairs across all words
+        pair_counts: Counter[tuple[bytes, bytes]] = Counter()
+        for word, freq in word_freqs.items():
+            for pair in get_pairs(word):
+                pair_counts[pair] += freq
+                
+        # If no more pairs can be merged, break early
+        if not pair_counts:
+            break
+            
+        # a. SELECT BEST PAIR (DETERMINISTIC TIE-BREAKING)
+        # Using the exact max() logic from the assignment docstring so it perfectly 
+        # matches the autograder's expected tie-breaking behavior.
+        best_pair = max(pair_counts, key=lambda p: (pair_counts[p], p))
+        
+        # b. CREATE MERGED TOKEN
+        first, second = best_pair
+        new_token = first + second
+        
+        vocab[len(vocab)] = new_token
+        merges.append(best_pair)
+        
+        # c. UPDATE WORD REPRESENTATIONS
+        new_word_freqs: Counter[tuple[bytes, ...]] = Counter()
+        for word, freq in word_freqs.items():
+            if len(word) > 1:
+                # Use the helper function provided in your skeleton
+                new_word = merge_word(word, best_pair)
+                new_word_freqs[new_word] += freq
+            else:
+                new_word_freqs[word] += freq
+                
+        word_freqs = new_word_freqs
+
+    # 5. RETURN
+    return vocab, merges
+    
+    # raise NotImplementedError("Implement train_bpe")
+
+if __name__ == "__main__":
+    # 1. Set up the argument parser
+    parser = argparse.ArgumentParser(description="Train a BPE tokenizer on TinyStories.")
+    
+    # Define the arguments
+    parser.add_argument(
+        "--input_path", 
+        type=str, 
+        default="fixtures/tinystories_sample.txt", 
+        help="Path to the input corpus (e.g., TinyStories dataset)."
+    )
+    parser.add_argument(
+        "--vocab_size", 
+        type=int, 
+        default=5000, 
+        help="Target vocabulary size for the BPE algorithm."
+    )
+    parser.add_argument(
+        "--special_tokens", 
+        nargs="*", 
+        default=["<|endoftext|>"], 
+        help="List of special tokens to initialize in the vocabulary."
+    )
+    parser.add_argument(
+        "--vocab_save_path", 
+        type=str, 
+        default="vocab.json", 
+        help="File path to save the learned vocabulary."
+    )
+    parser.add_argument(
+        "--merges_save_path", 
+        type=str, 
+        default="merges.json", 
+        help="File path to save the learned merge rules."
+    )
+
+    args = parser.parse_args()
+
+    # 2. Validate input path
+    input_file = Path(args.input_path)
+    if not input_file.exists():
+        print(f"Error: Could not find '{input_file}'.")
+        print("Make sure you are running the script from the correct directory.")
+        exit(1)
+
+    # 3. Run the BPE training procedure
+    print(f"Loading dataset from '{input_file}'...")
+    print(f"Running BPE training (Target Vocab Size: {args.vocab_size}). This may take a moment...")
+    
+    vocab, merges = train_bpe(
+        input_path=input_file,
+        vocab_size=args.vocab_size,
+        special_tokens=args.special_tokens
+    )
+    
+    print(f"Success! Learned {len(vocab)} vocab items and {len(merges)} merges.")
+
+    # 4. Save the learned vocabulary and merge rules
+    # We decode bytes using 'latin-1' so they can be safely serialized to JSON and perfectly 
+    # reconstructed later without UTF-8 error crashes.
+    
+    vocab_serializable = {str(k): v.decode("latin-1") for k, v in vocab.items()}
+    with open(args.vocab_save_path, "w", encoding="utf-8") as f:
+        json.dump(vocab_serializable, f, indent=2)
+        
+    merges_serializable = [[m[0].decode("latin-1"), m[1].decode("latin-1")] for m in merges]
+    with open(args.merges_save_path, "w", encoding="utf-8") as f:
+        json.dump(merges_serializable, f, indent=2)
+        
+    print(f"Saved vocabulary to: {args.vocab_save_path}")
+    print(f"Saved merge rules to: {args.merges_save_path}")
