@@ -252,7 +252,7 @@ class Tokenizer:
         # Split by special tokens first
         parts = self._split_with_special_tokens(text)
         
-        for part, is_special in parts:
+        for part, is_special in tqdm(parts):
             if is_special:
                 # Add special token ID
                 ids.append(self.special_token_ids[part])
