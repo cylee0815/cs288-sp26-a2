@@ -495,6 +495,9 @@ Examples:
     
     # Step 2: Pretrain LM
     pretrained_model = pretrain_lm(tokenizer, config, device)
+
+    ### flush PyTorch's memory allocator between major steps
+    torch.cuda.empty_cache()
     
     # Step 3: Fine-tune for QA
     qa_model = finetune_qa(pretrained_model, tokenizer, config, device)

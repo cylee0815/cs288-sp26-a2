@@ -1,8 +1,9 @@
 """
 Prompting utilities for multiple-choice QA.
-Example submission.
+Improved with true batching, Few-Shot, and Chain-of-Thought (CoT) support.
 """
 import torch
+import re
 from torch import Tensor
 from typing import List, Dict, Any, Optional
 import sys
@@ -14,15 +15,15 @@ if _parent not in sys.path:
 
 from part3.nn_utils import softmax
 
-
 class PromptTemplate:
     TEMPLATES = {
         "basic": "Context: {context}\n\nQuestion: {question}\n\nChoices:\n{choices_formatted}\n\nAnswer:",
-        "instruction": "Read the following passage and answer the question.\n\nPassage: {context}\n\nQuestion: {question}\n\n{choices_formatted}\n\nSelect the letter:",
-        "simple": "{context}\n{question}\n{choices_formatted}\nThe answer is",
+        "expert": "You are an expert reading comprehension solver. Read the passage and select the correct letter for the question.\n\nPassage: {context}\n\nQuestion: {question}\n\nChoices:\n{choices_formatted}\n\nCorrect Answer:",
+        "cot": "Context: {context}\n\nQuestion: {question}\n\nChoices:\n{choices_formatted}\n\nLet's think step by step to find the correct answer.\n\nReasoning:"
     }
     
     def __init__(self, template_name: str = "basic", custom_template: Optional[str] = None, choice_format: str = "letter"):
+        self.template_name = template_name
         self.template = custom_template if custom_template else self.TEMPLATES.get(template_name, self.TEMPLATES["basic"])
         self.choice_format = choice_format
     
@@ -30,13 +31,39 @@ class PromptTemplate:
         labels = ["A", "B", "C", "D", "E", "F", "G", "H"] if self.choice_format == "letter" else [str(i+1) for i in range(len(choices))]
         return "\n".join(f"{l}. {c}" for l, c in zip(labels, choices))
     
-    def format(self, context: str, question: str, choices: List[str], **kwargs) -> str:
-        return self.template.format(context=context, question=question, choices_formatted=self._format_choices(choices), **kwargs)
-    
-    def format_with_answer(self, context: str, question: str, choices: List[str], answer_idx: int) -> str:
-        prompt = self.format(context, question, choices)
-        label = chr(ord('A') + answer_idx) if self.choice_format == "letter" else str(answer_idx + 1)
-        return f"{prompt} {label}"
+    def format(self, context: str, question: str, choices: List[str], few_shot_examples: Optional[List[Dict]] = None, **kwargs) -> str:
+        prompt = ""
+        
+        # 1. Prepend few-shot examples if provided
+        if few_shot_examples:
+            for ex in few_shot_examples:
+                prompt += self.template.format(
+                    context=ex["context"], 
+                    question=ex["question"], 
+                    choices_formatted=self._format_choices(ex["choices"]), 
+                    **kwargs
+                )
+                
+                # If using CoT, the few-shot examples should ideally contain a "reasoning" key
+                if self.template_name == "cot" and "reasoning" in ex:
+                    prompt += f" {ex['reasoning']}\n"
+                    
+                # Append the final correct answer
+                answer_label = chr(ord('A') + ex["answer"]) if self.choice_format == "letter" else str(ex["answer"] + 1)
+                
+                if self.template_name == "cot":
+                    prompt += f"Therefore, the correct choice is: {answer_label}\n\n"
+                else:
+                    prompt += f" {answer_label}\n\n"
+
+        # 2. Format the actual target question
+        prompt += self.template.format(
+            context=context, 
+            question=question, 
+            choices_formatted=self._format_choices(choices), 
+            **kwargs
+        )
+        return prompt
 
 
 class PromptingPipeline:
@@ -45,47 +72,131 @@ class PromptingPipeline:
         self.tokenizer = tokenizer
         self.template = template or PromptTemplate("basic")
         self.device = device
+        
+        # We need a pad token for true batching (fallback to EOS if pad doesn't exist)
+        self.pad_token_id = getattr(self.tokenizer, 'pad_token_id', None) or getattr(self.tokenizer, 'eos_token_id', 0)
         self._setup_choice_tokens()
     
     def _setup_choice_tokens(self):
+        """Extract exact token IDs for choices A, B, C, D to calculate probabilities."""
         self.choice_tokens = {}
-        for label in ["A", "B", "C", "D"]:
-            for prefix in ["", " "]:
-                token_ids = self.tokenizer.encode(prefix + label)
+        for label in ["A", "B", "C", "D", "E", "F"]:
+            for prefix in ["", " ", "\n"]:
+                # Try to encode safely depending on tokenizer API
+                try:
+                    token_ids = self.tokenizer.encode(prefix + label, add_special_tokens=False)
+                except TypeError:
+                    token_ids = self.tokenizer.encode(prefix + label)
+                    
                 if token_ids:
                     self.choice_tokens[label] = token_ids[-1]
                     break
-    
+
     @torch.no_grad()
-    def predict_single(self, context: str, question: str, choices: List[str], return_probs: bool = False):
+    def predict_batch(self, examples: List[Dict[str, Any]], batch_size: int = 8, few_shot_examples: Optional[List[Dict]] = None) -> List[int]:
+        """Fast batched inference looking only at the next-token logits (Standard / Few-shot)."""
         self.model.eval()
-        prompt = self.template.format(context, question, choices)
-        input_ids = torch.tensor([self.tokenizer.encode(prompt)], device=self.device)
-        logits = self.model(input_ids)[:, -1, :]
+        all_predictions = []
         
-        choice_labels = ["A", "B", "C", "D"][:len(choices)]
-        choice_logits = []
-        for label in choice_labels:
-            if label in self.choice_tokens:
-                choice_logits.append(logits[0, self.choice_tokens[label]].item())
-            else:
-                choice_logits.append(float("-inf"))
-        
-        choice_logits = torch.tensor(choice_logits)
-        probs = softmax(choice_logits, dim=-1)
-        prediction = probs.argmax().item()
-        
-        if return_probs:
-            return prediction, probs.tolist()
-        return prediction
-    
+        for i in range(0, len(examples), batch_size):
+            batch_ex = examples[i:i + batch_size]
+            prompts = [self.template.format(ex["context"], ex["question"], ex["choices"], few_shot_examples) for ex in batch_ex]
+            
+            # Left-pad sequences so the final token is aligned for logit extraction
+            encoded = [self.tokenizer.encode(p) for p in prompts]
+            max_len = max(len(seq) for seq in encoded)
+            padded_input_ids = [([self.pad_token_id] * (max_len - len(seq))) + seq for seq in encoded]
+            
+            input_tensor = torch.tensor(padded_input_ids, device=self.device)
+            logits = self.model(input_tensor)[:, -1, :] # Grab the logits for the very last token
+            
+            for b_idx, ex in enumerate(batch_ex):
+                choice_labels = ["A", "B", "C", "D", "E", "F"][:len(ex["choices"])]
+                choice_logits = [
+                    logits[b_idx, self.choice_tokens[label]].item() if label in self.choice_tokens else float("-inf")
+                    for label in choice_labels
+                ]
+                probs = softmax(torch.tensor(choice_logits), dim=-1)
+                all_predictions.append(probs.argmax().item())
+                
+        return all_predictions
+
     @torch.no_grad()
-    def predict_batch(self, examples: List[Dict[str, Any]], batch_size: int = 8) -> List[int]:
-        return [self.predict_single(ex["context"], ex["question"], ex["choices"]) for ex in examples]
+    def predict_batch_cot(self, examples: List[Dict[str, Any]], batch_size: int = 4, max_new_tokens: int = 150, few_shot_examples: Optional[List[Dict]] = None) -> List[int]:
+        """Chain-of-Thought batched inference using autoregressive generation and regex parsing."""
+        self.model.eval()
+        all_predictions = []
+        
+        for i in range(0, len(examples), batch_size):
+            batch_ex = examples[i:i + batch_size]
+            prompts = [self.template.format(ex["context"], ex["question"], ex["choices"], few_shot_examples) for ex in batch_ex]
+            
+            # Left-pad
+            encoded = [self.tokenizer.encode(p) for p in prompts]
+            max_len = max(len(seq) for seq in encoded)
+            padded_input_ids = [([self.pad_token_id] * (max_len - len(seq))) + seq for seq in encoded]
+            
+            input_tensor = torch.tensor(padded_input_ids, device=self.device)
+            attention_mask = (input_tensor != self.pad_token_id).long()
+            
+            # Generate the reasoning text
+            # (Assumes your model class has a .generate() method implemented)
+            output_sequences = self.model.generate(
+                input_tensor,
+                max_new_tokens=max_new_tokens,
+                do_sample=False, # Use greedy decoding for logic tasks
+            )
+            
+            for b_idx, ex in enumerate(batch_ex):
+                # Isolate the newly generated tokens
+                generated_tokens = output_sequences[b_idx][max_len:]
+                generated_text = self.tokenizer.decode(generated_tokens.tolist())
+                
+                predicted_idx = self._extract_answer_from_cot(generated_text, len(ex["choices"]))
+                all_predictions.append(predicted_idx)
+                
+        return all_predictions
+
+    def _extract_answer_from_cot(self, text: str, num_choices: int) -> int:
+        """Parses the generated reasoning to find the final selected letter."""
+        patterns = [
+            r"Therefore, the correct choice is:?\s*([A-F])",
+            r"The correct answer is:?\s*([A-F])",
+            r"Answer:\s*([A-F])",
+            r"\*\*([A-F])\*\*",
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                idx = ord(match.group(1).upper()) - ord('A')
+                if 0 <= idx < num_choices:
+                    return idx
+                    
+        # Fallback: just grab the very last standalone letter A-F in the text
+        fallback_match = re.findall(r'\b([A-F])\b', text, re.IGNORECASE)
+        if fallback_match:
+            idx = ord(fallback_match[-1].upper()) - ord('A')
+            if 0 <= idx < num_choices:
+                return idx
+                
+        return 0 # Default to A if parsing totally fails
+
+    @torch.no_grad()
+    def predict_single(self, context: str, question: str, choices: List[str], use_cot: bool = False):
+        examples = [{"context": context, "question": question, "choices": choices}]
+        if use_cot:
+            return self.predict_batch_cot(examples, batch_size=1)[0]
+        return self.predict_batch(examples, batch_size=1)[0]
 
 
-def evaluate_prompting(pipeline, examples: List[Dict[str, Any]], batch_size: int = 8) -> Dict[str, Any]:
-    predictions = pipeline.predict_batch(examples, batch_size)
+def evaluate_prompting(pipeline, examples: List[Dict[str, Any]], batch_size: int = 8, use_cot: bool = False, few_shot_examples: Optional[List[Dict]] = None) -> Dict[str, Any]:
+    if use_cot:
+        predictions = pipeline.predict_batch_cot(examples, batch_size=batch_size, few_shot_examples=few_shot_examples)
+    else:
+        predictions = pipeline.predict_batch(examples, batch_size=batch_size, few_shot_examples=few_shot_examples)
+        
     correct = sum(1 for p, ex in zip(predictions, examples) if ex.get("answer", -1) >= 0 and p == ex["answer"])
     total = sum(1 for ex in examples if ex.get("answer", -1) >= 0)
+    
     return {"accuracy": correct / total if total > 0 else 0.0, "predictions": predictions}
