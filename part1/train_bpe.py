@@ -301,7 +301,7 @@ def train_bpe(
         word_freqs = new_word_freqs
 
         # Manually update the progress bar by one step
-            pbar.update(1)
+        pbar.update(1)
 
     # 5. RETURN
     return vocab, merges
