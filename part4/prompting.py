@@ -27,7 +27,7 @@ class PromptTemplate:
         self.choice_format = choice_format
     
     def _format_choices(self, choices: List[str]) -> str:
-        labels = ["A", "B", "C", "D", "E", "F", "G", "H"] if self.choice_format == "letter" else [str(i+1) for i in range(len(choices))]
+        labels = ["A", "B", "C", "D"] if self.choice_format == "letter" else [str(i+1) for i in range(len(choices))]
         return "\n".join(f"{l}. {c}" for l, c in zip(labels, choices))
     
     def format(self, context: str, question: str, choices: List[str], few_shot_examples: Optional[List[Dict]] = None, **kwargs) -> str:
@@ -85,7 +85,7 @@ class PromptingPipeline:
     def _setup_choice_tokens(self):
         """Extract exact token IDs for choices A, B, C, D to calculate probabilities."""
         self.choice_tokens = {}
-        for label in ["A", "B", "C", "D", "E", "F"]:
+        for label in ["A", "B", "C", "D"]:
             for prefix in ["", " ", "\n"]:
                 try:
                     # Try to encode safely depending on tokenizer API
@@ -141,7 +141,7 @@ class PromptingPipeline:
             logits = self.model(input_tensor)[:, -1, :] # Grab the logits for the very last token
             
             for b_idx, ex in enumerate(batch_ex):
-                choice_labels = ["A", "B", "C", "D", "E", "F"][:len(ex["choices"])]
+                choice_labels = ["A", "B", "C", "D"][:len(ex["choices"])]
                 choice_logits = [
                     logits[b_idx, self.choice_tokens[label]].item() if label in self.choice_tokens else float("-inf")
                     for label in choice_labels
@@ -228,10 +228,10 @@ class PromptingPipeline:
     def _extract_answer_from_cot(self, text: str, num_choices: int) -> int:
         """Parses the generated reasoning to find the final selected letter."""
         patterns = [
-            r"Therefore, the correct choice is:?\s*([A-F])",
-            r"The correct answer is:?\s*([A-F])",
-            r"Answer:\s*([A-F])",
-            r"\*\*([A-F])\*\*",
+            r"Therefore, the correct choice is:?\s*([A-D])",
+            r"The correct answer is:?\s*([A-D])",
+            r"Answer:\s*([A-D])",
+            r"\*\*([A-D])\*\*",
         ]
         
         for pattern in patterns:
@@ -241,8 +241,8 @@ class PromptingPipeline:
                 if 0 <= idx < num_choices:
                     return idx
                     
-        # Fallback: just grab the very last standalone letter A-F in the text
-        fallback_match = re.findall(r'\b([A-F])\b', text, re.IGNORECASE)
+        # Fallback: just grab the very last standalone letter A-D in the text
+        fallback_match = re.findall(r'\b([A-D])\b', text, re.IGNORECASE)
         if fallback_match:
             idx = ord(fallback_match[-1].upper()) - ord('A')
             if 0 <= idx < num_choices:
