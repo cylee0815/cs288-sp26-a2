@@ -12,6 +12,7 @@ from typing import Optional, Dict, Any, Callable
 from pathlib import Path
 import time
 import sys
+from tqdm import tqdm
 
 _parent = str(Path(__file__).parent.parent)
 if _parent not in sys.path:
@@ -67,7 +68,7 @@ class Trainer:
         self.model.train()
         total_loss = 0.0
         num_batches = 0
-        for batch in self.train_dataloader:
+        for batch in tqdm(self.train_dataloader):
             self.optimizer.zero_grad()
             loss = self.compute_loss_fn(batch, self.model)
             loss.backward()
@@ -86,7 +87,7 @@ class Trainer:
         self.model.eval()
         total_loss = 0.0
         num_batches = 0
-        for batch in self.val_dataloader:
+        for batch in tqdm(self.val_dataloader):
             loss = self.compute_loss_fn(batch, self.model)
             total_loss += loss.item()
             num_batches += 1

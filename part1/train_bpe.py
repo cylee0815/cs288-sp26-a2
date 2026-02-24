@@ -15,6 +15,7 @@ from typing import Iterator
 import argparse
 import json
 from pathlib import Path
+from tqdm import tqdm
 
 
 # GPT-2 pre-tokenization pattern
@@ -192,7 +193,7 @@ def train_bpe(
     
     # Build set of "forbidden" substrings from special tokens
     forbidden_substrings = set()
-    for special in special_tokens:
+    for special in tqdm(special_tokens):
         special_bytes = special.encode("utf-8")
         for i in range(2, len(special_bytes) + 1):
             forbidden_substrings.add(special_bytes[:i])
