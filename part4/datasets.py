@@ -116,12 +116,14 @@ class MultipleChoiceQADataset(Dataset):
         return cls(data, tokenizer, **kwargs)
 
 
-def create_pretraining_dataloader(file_path, tokenizer, batch_size=8, max_length=256, stride=None, shuffle=True, num_workers=0):
+### MY REVISION
+# Change num_workers=0 to num_workers=4
+def create_pretraining_dataloader(file_path, tokenizer, batch_size=8, max_length=256, stride=None, shuffle=True, num_workers=4):
     dataset = PretrainingDataset(file_path, tokenizer, max_length, stride)
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=True)
 
-
-def create_qa_dataloader(data, tokenizer, batch_size=4, max_length=256, num_choices=4, shuffle=True, num_workers=0):
+# Change num_workers=0 to num_workers=4
+def create_qa_dataloader(data, tokenizer, batch_size=4, max_length=256, num_choices=4, shuffle=True, num_workers=4):
     if isinstance(data, (str, Path)):
         dataset = MultipleChoiceQADataset.from_json(data, tokenizer, max_length=max_length, num_choices=num_choices)
     else:

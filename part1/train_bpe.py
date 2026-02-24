@@ -287,14 +287,25 @@ def train_bpe(
         
         vocab[len(vocab)] = new_token
         merges.append(best_pair)
-        
+         
         # c. UPDATE WORD REPRESENTATIONS
         new_word_freqs: Counter[tuple[bytes, ...]] = Counter()
+        # for word, freq in word_freqs.items():
+        #     if len(word) > 1:
+        #         # Use the helper function provided in your skeleton
+        #         new_word = merge_word(word, best_pair)
+        #         new_word_freqs[new_word] += freq
+        #     else:
+        #         new_word_freqs[word] += freq
         for word, freq in word_freqs.items():
             if len(word) > 1:
-                # Use the helper function provided in your skeleton
-                new_word = merge_word(word, best_pair)
-                new_word_freqs[new_word] += freq
+                # FIX: Only run merge_word if both bytes actually exist in the word!
+                # If they don't exist, we know the pair can't exist, so skip the math.
+                if best_pair[0] in word and best_pair[1] in word:
+                    new_word = merge_word(word, best_pair)
+                    new_word_freqs[new_word] += freq
+                else:
+                    new_word_freqs[word] += freq  # Skip the expensive merge!
             else:
                 new_word_freqs[word] += freq
                 
