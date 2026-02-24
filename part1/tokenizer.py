@@ -46,6 +46,19 @@ class Tokenizer:
             token_bytes = token.encode("utf-8")
             if token_bytes in self.inverse_vocab:
                 self.special_token_ids[token] = self.inverse_vocab[token_bytes]
+
+        # --- SPEED OPTIMIZATIONS FOR SPECIAL TOKEN SPLITTING ---
+        # 1. Create a fast O(1) lookup set
+        self.special_toks_set = set(self.special_tokens_sorted)
+        
+        # 2. Pre-compile the regex pattern ONCE
+        if self.special_tokens_sorted:
+            escaped_special_tokens = map(re.escape, self.special_tokens_sorted)
+            self.special_toks_pattern = re.compile(f"({'|'.join(escaped_special_tokens)})")
+        else:
+            self.special_toks_pattern = None
+        # -------------------------------------------------------
+
         
         # GPT-2 regex pattern for pre-tokenization
         # This splits text into chunks that are tokenized independently
@@ -115,50 +128,6 @@ class Tokenizer:
             tokens = new_tokens
             
         return tokens
-
-    def _bpe(self, token_bytes: bytes) -> list[bytes]:
-        """
-        Apply BPE to a single token (sequence of bytes).
-        Returns a list of merged byte sequences.
-        """
-        # Start with individual bytes
-        tokens = [bytes([b]) for b in token_bytes]
-        
-        if len(tokens) <= 1:
-            return tokens
-        
-        while True:
-            # 1. Get all adjacent pairs in the current token list
-            pairs = self._get_pairs(tokens)
-            if not pairs:
-                break
-                
-            # 2. Filter pairs to only those whose merged result exists in our vocabulary
-            valid_pairs = [p for p in pairs if (p[0] + p[1]) in self.inverse_vocab]
-            
-            # If no pairs can be merged, we are done
-            if not valid_pairs:
-                break
-                
-            # 3. Find the pair whose merged result has the lowest vocab rank (lowest token ID)
-            # This directly aligns with tiktoken/GPT-2 logic
-            best_pair = min(valid_pairs, key=lambda p: self.inverse_vocab[p[0] + p[1]])
-            
-            # 4. Merge all occurrences of that pair
-            new_tokens = []
-            i = 0
-            while i < len(tokens):
-                # If we find the best_pair, merge them and skip the next token
-                if i < len(tokens) - 1 and tokens[i] == best_pair[0] and tokens[i + 1] == best_pair[1]:
-                    new_tokens.append(best_pair[0] + best_pair[1])
-                    i += 2
-                else:
-                    new_tokens.append(tokens[i])
-                    i += 1
-                    
-            tokens = new_tokens
-            
-        return tokens
         # raise NotImplementedError("Implement _bpe")
 
     def _split_with_special_tokens(self, text: str) -> list[tuple[str, bool]]:
@@ -166,37 +135,47 @@ class Tokenizer:
         Split text by special tokens, preserving them.
         Returns list of (substring, is_special) tuples.
         """
+        # if not self.special_tokens_sorted:
+        #     return [(text, False)] if text else []
+        
+        # result = []
+        # remaining = text
+        
+        # while remaining:
+        #     # Find the earliest occurring special token
+        #     earliest_pos = len(remaining)
+        #     earliest_token = None
+            
+        #     for special in self.special_tokens_sorted:
+        #         pos = remaining.find(special)
+        #         if pos != -1 and pos < earliest_pos:
+        #             earliest_pos = pos
+        #             earliest_token = special
+            
+        #     if earliest_token is None:
+        #         # No special token found, add remaining text
+        #         if remaining:
+        #             result.append((remaining, False))
+        #         break
+        #     else:
+        #         # Add text before the special token
+        #         if earliest_pos > 0:
+        #             result.append((remaining[:earliest_pos], False))
+        #         # Add the special token
+        #         result.append((earliest_token, True))
+        #         remaining = remaining[earliest_pos + len(earliest_token):]
+        
+        # return result
+
+        ### Extracted from Derek Xu from Ed Discussion
         if not self.special_tokens_sorted:
             return [(text, False)] if text else []
-        
-        result = []
-        remaining = text
-        
-        while remaining:
-            # Find the earliest occurring special token
-            earliest_pos = len(remaining)
-            earliest_token = None
-            
-            for special in self.special_tokens_sorted:
-                pos = remaining.find(special)
-                if pos != -1 and pos < earliest_pos:
-                    earliest_pos = pos
-                    earliest_token = special
-            
-            if earliest_token is None:
-                # No special token found, add remaining text
-                if remaining:
-                    result.append((remaining, False))
-                break
-            else:
-                # Add text before the special token
-                if earliest_pos > 0:
-                    result.append((remaining[:earliest_pos], False))
-                # Add the special token
-                result.append((earliest_token, True))
-                remaining = remaining[earliest_pos + len(earliest_token):]
-        
-        return result
+
+        return [
+            (p, p in self.special_toks_set) 
+            for p in self.special_toks_pattern.split(text) 
+            if p != ""
+        ]
 
     def _encode_chunk(self, text: str) -> list[int]:
         """
@@ -252,7 +231,7 @@ class Tokenizer:
         # Split by special tokens first
         parts = self._split_with_special_tokens(text)
         
-        for part, is_special in tqdm(parts):
+        for part, is_special in parts:
             if is_special:
                 # Add special token ID
                 ids.append(self.special_token_ids[part])
