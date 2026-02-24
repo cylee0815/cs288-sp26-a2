@@ -263,7 +263,7 @@ def train_bpe(
     merges: list[tuple[bytes, bytes]] = []
 
     # Initialize tqdm manually, specifying the total
-    pbar = tqdm(total=TOTAL_ITERATIONS, desc="Processing while loop")
+    pbar = tqdm(total=vocab_size, desc="Processing while loop")
     
     while len(vocab) < vocab_size:
         # Count pairs across all words
