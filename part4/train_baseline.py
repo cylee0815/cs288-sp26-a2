@@ -71,8 +71,8 @@ CONFIGS = {
         "num_heads": 8,
         "d_ff": 1024,
         "context_length": 512,
-        "pretrain_epochs": 3,
-        "finetune_epochs": 3, #10
+        "pretrain_epochs": 1, #3
+        "finetune_epochs": 1, #10
         "batch_size": 4, #32
         "lr": 3e-4,
     },
