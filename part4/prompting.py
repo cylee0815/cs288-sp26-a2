@@ -72,6 +72,12 @@ class PromptingPipeline:
         self.tokenizer = tokenizer
         self.template = template or PromptTemplate("basic")
         self.device = device
+
+        # MY REVISION: Dynamically grab max length from your model
+        if hasattr(model, 'config'):
+            self.max_length = model.config.get('context_length', 512) if isinstance(model.config, dict) else getattr(model.config, 'context_length', 512)
+        else:
+            self.max_length = 512
         
         # We need a pad token for true batching (fallback to EOS if pad doesn't exist)
         self.pad_token_id = getattr(self.tokenizer, 'pad_token_id', None) or getattr(self.tokenizer, 'eos_token_id', 0)
@@ -82,8 +88,8 @@ class PromptingPipeline:
         self.choice_tokens = {}
         for label in ["A", "B", "C", "D", "E", "F"]:
             for prefix in ["", " ", "\n"]:
-                # Try to encode safely depending on tokenizer API
                 try:
+                    # Try to encode safely depending on tokenizer API
                     token_ids = self.tokenizer.encode(prefix + label, add_special_tokens=False)
                 except TypeError:
                     token_ids = self.tokenizer.encode(prefix + label)
@@ -91,6 +97,29 @@ class PromptingPipeline:
                 if token_ids:
                     self.choice_tokens[label] = token_ids[-1]
                     break
+
+    def _build_safe_prompts(self, batch_ex: List[Dict], few_shot_examples: Optional[List[Dict]], max_generated_tokens: int = 0) -> List[str]:
+        """Dynamically truncates ONLY the context to fit within the model's max length."""
+        prompts = []
+        for ex in batch_ex:
+            # 1. Format a "dummy" prompt to measure the few-shot, question, and choices
+            dummy_prompt = self.template.format(context="", question=ex["question"], choices=ex["choices"], few_shot_examples=few_shot_examples)
+            dummy_tokens = self.tokenizer.encode(dummy_prompt)
+            
+            # 2. Calculate remaining space (minus a safety buffer of 5 for special tokenizer tokens)
+            max_ctx_len = self.max_length - len(dummy_tokens) - max_generated_tokens - 5
+            
+            # 3. Encode the context, and truncate ONLY the context if it's too long
+            ctx_tokens = self.tokenizer.encode(ex["context"])
+            if len(ctx_tokens) > max_ctx_len and max_ctx_len > 0:
+                ctx_tokens = ctx_tokens[:max_ctx_len] 
+                
+            # 4. Decode the safe context back to string and build the final prompt
+            safe_context = self.tokenizer.decode(ctx_tokens)
+            safe_prompt = self.template.format(context=safe_context, question=ex["question"], choices=ex["choices"], few_shot_examples=few_shot_examples)
+            prompts.append(safe_prompt)
+            
+        return prompts
 
     @torch.no_grad()
     def predict_batch(self, examples: List[Dict[str, Any]], batch_size: int = 8, few_shot_examples: Optional[List[Dict]] = None) -> List[int]:
@@ -100,7 +129,9 @@ class PromptingPipeline:
         
         for i in range(0, len(examples), batch_size):
             batch_ex = examples[i:i + batch_size]
-            prompts = [self.template.format(ex["context"], ex["question"], ex["choices"], few_shot_examples) for ex in batch_ex]
+            
+            # Build prompts safely (truncating context only)
+            prompts = self._build_safe_prompts(batch_ex, few_shot_examples, max_generated_tokens=0)
             
             # Left-pad sequences so the final token is aligned for logit extraction
             encoded = [self.tokenizer.encode(p) for p in prompts]
@@ -129,7 +160,9 @@ class PromptingPipeline:
         
         for i in range(0, len(examples), batch_size):
             batch_ex = examples[i:i + batch_size]
-            prompts = [self.template.format(ex["context"], ex["question"], ex["choices"], few_shot_examples) for ex in batch_ex]
+            
+            # Build prompts safely, leaving room for max_new_tokens
+            prompts = self._build_safe_prompts(batch_ex, few_shot_examples, max_generated_tokens=max_new_tokens)
             
             # Left-pad
             encoded = [self.tokenizer.encode(p) for p in prompts]
