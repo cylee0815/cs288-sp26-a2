@@ -73,7 +73,7 @@ CONFIGS = {
         "context_length": 512,
         "pretrain_epochs": 3,
         "finetune_epochs": 10,
-        "batch_size": 32,
+        "batch_size": 4, #32
         "lr": 3e-4,
     },
     "medium": {
