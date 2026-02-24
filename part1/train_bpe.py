@@ -202,6 +202,7 @@ def train_bpe(
     # ---------------------------------------------------------
     # 1. VOCABULARY INITIALIZATION
     # ---------------------------------------------------------
+    print("1. VOCABULARY INITIALIZATION")
     vocab: dict[int, bytes] = {}
     idx = 0
     
@@ -229,9 +230,10 @@ def train_bpe(
     # ---------------------------------------------------------
     # 2. WORD FREQUENCY COUNTING
     # ---------------------------------------------------------
+    print("2. WORD FREQUENCY COUNTING")
     word_freqs: Counter[tuple[bytes, ...]] = Counter()
     
-    for token_str in pre_tokenize(text, special_tokens):
+    for token_str in tqdm(pre_tokenize(text, special_tokens)):
         if token_str in special_tokens:
             continue  # Skip special tokens in BPE merging
             
@@ -257,7 +259,11 @@ def train_bpe(
     # ---------------------------------------------------------
     # 3 & 4. PAIR FREQUENCY COUNTING & MERGE LOOP
     # ---------------------------------------------------------
+    print("3 & 4. PAIR FREQUENCY COUNTING & MERGE LOOP")
     merges: list[tuple[bytes, bytes]] = []
+
+    # Initialize tqdm manually, specifying the total
+    pbar = tqdm(total=TOTAL_ITERATIONS, desc="Processing while loop")
     
     while len(vocab) < vocab_size:
         # Count pairs across all words
@@ -293,6 +299,9 @@ def train_bpe(
                 new_word_freqs[word] += freq
                 
         word_freqs = new_word_freqs
+
+        # Manually update the progress bar by one step
+            pbar.update(1)
 
     # 5. RETURN
     return vocab, merges

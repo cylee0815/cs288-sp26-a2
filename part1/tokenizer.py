@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import regex as re
 from typing import Iterator
+from tqdm import tqdm
 
 
 class Tokenizer:
@@ -41,7 +42,7 @@ class Tokenizer:
         
         # Build special token to ID mapping
         self.special_token_ids = {}
-        for token in self.special_tokens:
+        for token in tqdm(self.special_tokens):
             token_bytes = token.encode("utf-8")
             if token_bytes in self.inverse_vocab:
                 self.special_token_ids[token] = self.inverse_vocab[token_bytes]
