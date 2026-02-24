@@ -19,8 +19,11 @@ def softmax(x: Tensor, dim: int = -1) -> Tensor:
     """
     # TODO: Implement numerically stable softmax. You can re-use the same one 
     # used in part 2. But for this problem, you need to implement a numerically stable version to pass harder tests.
-    
-    raise NotImplementedError("Implement softmax")
+    # Subtract max for numerical stability (prevents overflow when doing exp)
+    x_max = torch.max(x, dim=dim, keepdim=True)[0]
+    exp_x = torch.exp(x - x_max)
+    return exp_x / torch.sum(exp_x, dim=dim, keepdim=True)
+    # raise NotImplementedError("Implement softmax")
 
 
 def cross_entropy(logits: Tensor, targets: Tensor) -> Tensor:
@@ -36,8 +39,25 @@ def cross_entropy(logits: Tensor, targets: Tensor) -> Tensor:
         Scalar tensor containing the mean cross-entropy loss
     """
     # TODO: Implement cross-entropy loss
+    # 1. Numerically stable log_softmax: log(exp(x - max) / sum(exp(x - max)))
+    # which simplifies to: (x - max) - log(sum(exp(x - max)))
+    max_logits = torch.max(logits, dim=-1, keepdim=True)[0]
+    safe_logits = logits - max_logits
     
-    raise NotImplementedError("Implement cross_entropy")
+    log_sum_exp = torch.log(torch.sum(torch.exp(safe_logits), dim=-1, keepdim=True))
+    log_probs = safe_logits - log_sum_exp
+    
+    # 2. Extract the log probability of the true target classes
+    # logits shape: (N, C), targets shape: (N,)
+    batch_size = logits.shape[0]
+    batch_indices = torch.arange(batch_size, device=logits.device)
+    
+    # Gather the log_probs for the specific target indices
+    target_log_probs = log_probs[batch_indices, targets]
+    
+    # 3. NLL Loss is the negative mean of the target log probabilities
+    return -torch.mean(target_log_probs)
+    # raise NotImplementedError("Implement cross_entropy")
 
 
 def gradient_clipping(parameters, max_norm: float) -> Tensor:
@@ -52,8 +72,27 @@ def gradient_clipping(parameters, max_norm: float) -> Tensor:
         The total norm of the gradients before clipping
     """
     # TODO: Implement gradient clipping
+    # Collect all parameters that have gradients
+    params = [p for p in parameters if p.grad is not None]
+    if not params:
+        return torch.tensor(0.0)
     
-    raise NotImplementedError("Implement gradient_clipping")
+    # Calculate the global L2 norm across all parameter gradients
+    # total_norm = sqrt(sum(norm(grad)^2))
+    norms = [torch.norm(p.grad.detach(), p=2.0) for p in params]
+    total_norm = torch.norm(torch.stack(norms), p=2.0)
+    
+    # Compute scaling coefficient
+    # Add small epsilon to prevent division by zero
+    clip_coef = max_norm / (total_norm + 1e-6)
+    
+    # If the total norm exceeds the max norm, scale gradients down
+    if clip_coef < 1.0:
+        for p in params:
+            p.grad.detach().mul_(clip_coef)
+            
+    return total_norm
+    # raise NotImplementedError("Implement gradient_clipping")
 
 
 def token_accuracy(logits: Tensor, targets: Tensor, ignore_index: int = -100) -> Tensor:
@@ -84,8 +123,24 @@ def token_accuracy(logits: Tensor, targets: Tensor, ignore_index: int = -100) ->
         tensor(0.6667)  # 2 out of 3 correct
     """
     # TODO: Implement token accuracy
+    # Find the predicted class (index with highest logit)
+    preds = torch.argmax(logits, dim=-1)
     
-    raise NotImplementedError("Implement token_accuracy")
+    # Create a mask to filter out ignored indices
+    valid_mask = (targets != ignore_index)
+    
+    # Check predictions against targets where mask is valid
+    correct = (preds == targets) & valid_mask
+    
+    # Sum of correct predictions divided by total valid tokens
+    valid_tokens = valid_mask.sum()
+    
+    # Prevent division by zero if all targets are ignored
+    if valid_tokens == 0:
+        return torch.tensor(0.0, device=logits.device)
+        
+    return correct.sum().float() / valid_tokens.float()
+    # raise NotImplementedError("Implement token_accuracy")
 
 
 def perplexity(logits: Tensor, targets: Tensor, ignore_index: int = -100) -> Tensor:
@@ -119,5 +174,20 @@ def perplexity(logits: Tensor, targets: Tensor, ignore_index: int = -100) -> Ten
         tensor(3.)  # Equal to vocab_size (worst case for uniform)
     """
     # TODO: Implement perplexity
+    # Create a mask to filter out ignored indices
+    valid_mask = (targets != ignore_index)
     
-    raise NotImplementedError("Implement perplexity")
+    # Filter both logits and targets
+    valid_logits = logits[valid_mask]
+    valid_targets = targets[valid_mask]
+    
+    # Handle the edge case where everything is masked out
+    if valid_logits.numel() == 0:
+        return torch.tensor(1.0, device=logits.device)
+        
+    # Calculate Cross Entropy Loss on valid tokens
+    loss = cross_entropy(valid_logits, valid_targets)
+    
+    # Perplexity = exp(Loss)
+    return torch.exp(loss)
+    # raise NotImplementedError("Implement perplexity")
