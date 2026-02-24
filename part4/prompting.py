@@ -3,7 +3,7 @@ Prompting utilities for multiple-choice QA.
 Improved with true batching, Few-Shot, and Chain-of-Thought (CoT) support.
 """
 import torch
-import re
+import reTransformerForMultipleChoice
 from torch import Tensor
 from typing import List, Dict, Any, Optional
 import sys
@@ -153,6 +153,44 @@ class PromptingPipeline:
         return all_predictions
 
     @torch.no_grad()
+    def _generate_greedy(self, input_ids: torch.Tensor, max_new_tokens: int) -> torch.Tensor:
+        """
+        Manually generates tokens autoregressively.
+        Assumes self.model(input_ids) returns logits of shape [batch, seq_len, vocab_size].
+        """
+        eos_token_id = getattr(self.tokenizer, 'eos_token_id', None)
+        
+        # Track which sequences in the batch have hit the EOS token
+        batch_size = input_ids.size(0)
+        unfinished_sequences = torch.ones(batch_size, dtype=torch.long, device=self.device)
+        
+        for _ in range(max_new_tokens):
+            # 1. Forward pass (get logits)
+            logits = self.model(input_ids)
+            
+            # 2. Get the logits for the very last generated token
+            next_token_logits = logits[:, -1, :]
+            
+            # 3. Greedy selection: pick the token with the highest logit
+            next_tokens = torch.argmax(next_token_logits, dim=-1)
+            
+            # 4. Handle End-of-Sequence (EOS)
+            if eos_token_id is not None:
+                # If a sequence is already finished, just output the pad token
+                next_tokens = next_tokens * unfinished_sequences + self.pad_token_id * (1 - unfinished_sequences)
+                # Mark newly finished sequences
+                unfinished_sequences = unfinished_sequences.mul((next_tokens != eos_token_id).long())
+            
+            # 5. Append the newly generated tokens to the input sequence
+            input_ids = torch.cat([input_ids, next_tokens.unsqueeze(-1)], dim=-1)
+            
+            # 6. Stop early if every sequence in the batch has emitted an EOS token
+            if eos_token_id is not None and unfinished_sequences.max() == 0:
+                break
+                
+        return input_ids
+    
+    @torch.no_grad()
     def predict_batch_cot(self, examples: List[Dict[str, Any]], batch_size: int = 4, max_new_tokens: int = 150, few_shot_examples: Optional[List[Dict]] = None) -> List[int]:
         """Chain-of-Thought batched inference using autoregressive generation and regex parsing."""
         self.model.eval()
@@ -173,11 +211,9 @@ class PromptingPipeline:
             attention_mask = (input_tensor != self.pad_token_id).long()
             
             # Generate the reasoning text
-            # (Assumes your model class has a .generate() method implemented)
-            output_sequences = self.model.generate(
-                input_tensor,
-                max_new_tokens=max_new_tokens,
-                do_sample=False, # Use greedy decoding for logic tasks
+            output_sequences = self._generate_greedy(
+                input_ids=input_tensor,
+                max_new_tokens=max_new_tokens
             )
             
             for b_idx, ex in enumerate(batch_ex):
