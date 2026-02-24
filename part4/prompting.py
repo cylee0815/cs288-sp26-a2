@@ -3,7 +3,6 @@ Prompting utilities for multiple-choice QA.
 Improved with true batching, Few-Shot, and Chain-of-Thought (CoT) support.
 """
 import torch
-import reTransformerForMultipleChoice
 from torch import Tensor
 from typing import List, Dict, Any, Optional
 import sys
