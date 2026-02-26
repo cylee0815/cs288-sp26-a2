@@ -55,54 +55,43 @@ class MultipleChoiceQADataset(Dataset):
         question = example["question"]
         choices = example["choices"]
         answer = example.get("answer", -1)
-        
+    
         all_input_ids = []
         all_attention_masks = []
-        
-        # for choice in choices:
-        #     text = self._format_choice_input(context, question, choice)
-        #     token_ids = self.tokenizer.encode(text)
-        #     if len(token_ids) > self.max_length:
-        #         token_ids = token_ids[:self.max_length]
-        #     attention_mask = [1] * len(token_ids)
-        #     padding_length = self.max_length - len(token_ids)
-        #     token_ids = token_ids + [0] * padding_length
-        #     attention_mask = attention_mask + [0] * padding_length
-        #     all_input_ids.append(token_ids)
-        #     all_attention_masks.append(attention_mask)
-        
-        # return {
-        #     "input_ids": torch.tensor(all_input_ids, dtype=torch.long),
-        #     "attention_mask": torch.tensor(all_attention_masks, dtype=torch.long),
-        #     "labels": torch.tensor(answer, dtype=torch.long),
-        # }
-        ### MY REVISION
+    
         for choice in choices:
-            # 1. Format and encode the question & choice FIRST so they are never truncated
+            # 1. Format and encode components
             q_c_text = f"\n\nQuestion: {question}\n\nAnswer: {choice}"
             q_c_tokens = self.tokenizer.encode(q_c_text)
-            
-            # 2. See how much space we have left for the context
-            max_ctx_len = self.max_length - len(q_c_tokens)
-            
-            # 3. Encode the context, and truncate ONLY the context if it's too long
             ctx_tokens = self.tokenizer.encode(context)
+    
+            # 2. Strict Truncation Logic
+            # If the Question + Choice is longer than the total max_length, 
+            # truncate it first (otherwise we'll have a negative budget for context)
+            if len(q_c_tokens) > self.max_length:
+                q_c_tokens = q_c_tokens[:self.max_length]
+    
+            # Calculate remaining budget for context
+            max_ctx_len = self.max_length - len(q_c_tokens)
+    
+            # Truncate context to fit the remaining space
             if len(ctx_tokens) > max_ctx_len:
-                ctx_tokens = ctx_tokens[:max_ctx_len] 
-                
-            # Combine them: Context + Question + Choice
+                ctx_tokens = ctx_tokens[:max_ctx_len]
+    
+            # Combine: [Context] + [Question + Choice]
             token_ids = ctx_tokens + q_c_tokens
-            
-            # 4. LEFT PADDING: add zeros to the front, so the choice is the absolute last token
+    
+            # 3. Left Padding
+            # This ensures the 'Choice' token is always the absolute last index (-1)
             padding_length = self.max_length - len(token_ids)
             
-            # Build the padded tensors
+            # By construction, padding_length will now always be >= 0
             padded_token_ids = ([0] * padding_length) + token_ids
             padded_attention_mask = ([0] * padding_length) + ([1] * len(token_ids))
-            
+    
             all_input_ids.append(padded_token_ids)
             all_attention_masks.append(padded_attention_mask)
-        
+    
         return {
             "input_ids": torch.tensor(all_input_ids, dtype=torch.long),
             "attention_mask": torch.tensor(all_attention_masks, dtype=torch.long),

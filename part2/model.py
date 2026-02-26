@@ -408,35 +408,55 @@ class RotaryPositionEmbedding(nn.Module):
             
             x_rotated = x * cos + rotate_half(x) * sin  # (2, 8, 10, 64)
         """
-        # TODO: Implement RoPE forward pass
-        cos = self.cos_cached[token_positions]
-        sin = self.sin_cached[token_positions]
+        ### Faster implementation
+        # 1. Fetch and cast in a single step (removed the duplicate assignments)
+        # Casting here ensures stability for mixed precision (fp16/bf16) training
+        cos = self.cos_cached[token_positions].to(dtype=x.dtype)
+        sin = self.sin_cached[token_positions].to(dtype=x.dtype)
         
-        # Dynamically unsqueeze to handle ANY dimensionality
-        # As long as cos.dim() is less than x.dim(), we keep inserting a 
-        # dimension at index 1. 
-        # Example: (batch, seq, d_k) -> (batch, 1, seq, d_k)
-        cos = self.cos_cached[token_positions]
-        sin = self.sin_cached[token_positions]
-        
-        # Cast for mixed precision stability
-        cos = cos.to(dtype=x.dtype)
-        sin = sin.to(dtype=x.dtype)
-        
-        # Explicit dimension alignment
-        # If token_positions is 1D (seq_len,), cos is 2D (seq_len, d_k)
-        # We must add a batch dimension at the front.
+        # 2. Fast Dimension Alignment using None indexing (equivalent to unsqueeze)
+        # If token_positions is 1D (seq_len,), add batch dimension -> (1, seq_len, d_k)
         if token_positions.dim() == 1:
-            cos = cos.unsqueeze(0)  # (1, seq_len, d_k)
-            sin = sin.unsqueeze(0)
+            cos = cos[None, ...]
+            sin = sin[None, ...]
             
-        # If x is 4D (batch, heads, seq_len, d_k), we must add a heads dimension
+        # If x is 4D (batch, heads, seq_len, d_k), add heads dimension -> (batch, 1, seq_len, d_k)
         if x.dim() == 4:
-            cos = cos.unsqueeze(1)  # (batch/1, 1, seq_len, d_k)
-            sin = sin.unsqueeze(1)
+            cos = cos[:, None, :, :]
+            sin = sin[:, None, :, :]
             
-        return x * cos + self._rotate_half(x) * sin
-        # raise NotImplementedError("Implement RotaryPositionEmbedding.forward")
+        # 3. Apply rotation
+        return (x * cos) + (self._rotate_half(x) * sin)
+
+        # # TODO: Implement RoPE forward pass
+        # cos = self.cos_cached[token_positions]
+        # sin = self.sin_cached[token_positions]
+        
+        # # Dynamically unsqueeze to handle ANY dimensionality
+        # # As long as cos.dim() is less than x.dim(), we keep inserting a 
+        # # dimension at index 1. 
+        # # Example: (batch, seq, d_k) -> (batch, 1, seq, d_k)
+        # cos = self.cos_cached[token_positions]
+        # sin = self.sin_cached[token_positions]
+        
+        # # Cast for mixed precision stability
+        # cos = cos.to(dtype=x.dtype)
+        # sin = sin.to(dtype=x.dtype)
+        
+        # # Explicit dimension alignment
+        # # If token_positions is 1D (seq_len,), cos is 2D (seq_len, d_k)
+        # # We must add a batch dimension at the front.
+        # if token_positions.dim() == 1:
+        #     cos = cos.unsqueeze(0)  # (1, seq_len, d_k)
+        #     sin = sin.unsqueeze(0)
+            
+        # # If x is 4D (batch, heads, seq_len, d_k), we must add a heads dimension
+        # if x.dim() == 4:
+        #     cos = cos.unsqueeze(1)  # (batch/1, 1, seq_len, d_k)
+        #     sin = sin.unsqueeze(1)
+            
+        # return x * cos + self._rotate_half(x) * sin
+        # # raise NotImplementedError("Implement RotaryPositionEmbedding.forward")
 
 
 def apply_rope(x: Tensor, d_model: int, theta: float, max_seq_len: int, token_positions: Tensor) -> Tensor:
