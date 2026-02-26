@@ -46,7 +46,8 @@ class Trainer:
         self.compute_loss_fn = compute_loss_fn or self._default_lm_loss
         
         # 1. Initialize GradScaler for AMP
-        self.scaler = torch.cuda.amp.GradScaler(enabled=config.use_amp)
+        self.scaler = torch.amp.GradScaler('cuda', enabled=config.use_amp)
+        # self.scaler = torch.cuda.amp.GradScaler(enabled=config.use_amp)
         
         # ==========================================
         # 2. NEW: Weight Decay Exclusion

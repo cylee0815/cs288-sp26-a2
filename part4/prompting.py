@@ -126,44 +126,58 @@ class PromptingPipeline:
         return prompts
 
     @torch.no_grad()
-    def predict_batch(self, examples: List[Dict[str, Any]], batch_size: int = 8, few_shot_examples: Optional[List[Dict]] = None) -> List[int]:
+    def predict_batch(
+        self, 
+        examples: List[Dict[str, Any]], 
+        batch_size: int = 8, 
+        few_shot_examples: Optional[List[Dict]] = None
+    ) -> List[int]:
         """Fast batched inference looking only at the next-token logits (Standard / Few-shot)."""
         self.model.eval()
         all_predictions = []
-        
+    
         for i in range(0, len(examples), batch_size):
             batch_ex = examples[i:i + batch_size]
-            
+    
             # Build prompts safely (truncating context only)
             prompts = self._build_safe_prompts(batch_ex, few_shot_examples, max_generated_tokens=0)
-            
+    
             # Left-pad sequences so the final token is aligned for logit extraction
             encoded = [self.tokenizer.encode(p) for p in prompts]
             max_len = max(len(seq) for seq in encoded)
             padded_input_ids = [([self.pad_token_id] * (max_len - len(seq))) + seq for seq in encoded]
-            
             input_tensor = torch.tensor(padded_input_ids, device=self.device)
-            logits = self.model(input_tensor)[:, -1, :] # Grab the logits for the very last token
-            
+    
+            # Forward pass
+            logits = self.model(input_tensor)
+    
+            # Handle both [Batch, Seq, Vocab] and [Batch, Vocab] outputs
+            if logits.dim() == 3:
+                last_token_logits = logits[:, -1, :]  # [Batch, Vocab]
+            elif logits.dim() == 2:
+                last_token_logits = logits          # Already [Batch, Vocab]
+            else:
+                raise ValueError(f"Unexpected logits dimension: {logits.dim()}")
+    
+            # Loop over batch examples
             for b_idx, ex in enumerate(batch_ex):
-                # Match the labels to the choice_format!
+                # Match the labels to the choice format
                 if self.template.choice_format == "letter":
                     choice_labels = ["A", "B", "C", "D"][:len(ex["choices"])]
                 else:
-                    choice_labels = [str(j+1) for j in range(len(ex["choices"]))]
-                
-                # 1. Get the logits for the last token only (batch, vocab_size)
-                last_token_logits = logits[:, -1, :] 
-                
-                # 2. Index into the vocab dimension of that last token
+                    choice_labels = [str(j + 1) for j in range(len(ex["choices"]))]
+    
+                # Extract logits for each choice
                 choice_logits = [
-                    last_token_logits[b_idx, self.choice_tokens[label]].item() 
+                    last_token_logits[b_idx, self.choice_tokens[label]].item()
                     if label in self.choice_tokens else float("-inf")
-                    for label in choices # Assuming you're iterating over ['A', 'B', 'C', 'D']
+                    for label in choice_labels
                 ]
+    
+                # Compute probabilities and pick the argmax
                 probs = softmax(torch.tensor(choice_logits), dim=-1)
                 all_predictions.append(probs.argmax().item())
-                
+    
         return all_predictions
 
     @torch.no_grad()

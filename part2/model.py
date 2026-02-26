@@ -428,33 +428,35 @@ class RotaryPositionEmbedding(nn.Module):
             x_rotated = x * cos + rotate_half(x) * sin  # (2, 8, 10, 64)
         """
         ### Faster implementation
+        # Ensure cache is on same device as x
+        if self.cos_cached.device != x.device:
+            self.cos_cached = self.cos_cached.to(x.device)
+            self.sin_cached = self.sin_cached.to(x.device)
+    
         max_pos = token_positions.max().item()
         current_len = self.cos_cached.size(0)
-
+    
         if max_pos >= current_len:
             new_len = max_pos + 1
             self._precompute_cache(new_len)
-
-        # -------------------------------------------------
-        # 2️⃣ Fetch cos/sin
-        # -------------------------------------------------
-        cos = self.cos_cached[token_positions].to(dtype=x.dtype)
-        sin = self.sin_cached[token_positions].to(dtype=x.dtype)
-
-        # -------------------------------------------------
-        # 3️⃣ Align dimensions
-        # -------------------------------------------------
+            # Move new cache to correct device
+            self.cos_cached = self.cos_cached.to(x.device)
+            self.sin_cached = self.sin_cached.to(x.device)
+    
+        cos = self.cos_cached[token_positions]
+        sin = self.sin_cached[token_positions]
+    
+        cos = cos.to(dtype=x.dtype)
+        sin = sin.to(dtype=x.dtype)
+    
         if token_positions.dim() == 1:
             cos = cos[None, ...]
             sin = sin[None, ...]
-
+    
         if x.dim() == 4:
             cos = cos[:, None, :, :]
             sin = sin[:, None, :, :]
-
-        # -------------------------------------------------
-        # 4️⃣ Apply rotation
-        # -------------------------------------------------
+    
         return (x * cos) + (self._rotate_half(x) * sin)
 
         # # TODO: Implement RoPE forward pass
