@@ -152,9 +152,14 @@ class PromptingPipeline:
                 else:
                     choice_labels = [str(j+1) for j in range(len(ex["choices"]))]
                 
+                # 1. Get the logits for the last token only (batch, vocab_size)
+                last_token_logits = logits[:, -1, :] 
+                
+                # 2. Index into the vocab dimension of that last token
                 choice_logits = [
-                    logits[b_idx, self.choice_tokens[label]].item() if label in self.choice_tokens else float("-inf")
-                    for label in choice_labels
+                    last_token_logits[b_idx, self.choice_tokens[label]].item() 
+                    if label in self.choice_tokens else float("-inf")
+                    for label in choices # Assuming you're iterating over ['A', 'B', 'C', 'D']
                 ]
                 probs = softmax(torch.tensor(choice_logits), dim=-1)
                 all_predictions.append(probs.argmax().item())
