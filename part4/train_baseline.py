@@ -242,8 +242,37 @@ def pretrain_lm(
 
 
 # =============================================================================
-# Step 3: Evaluate Zero-Shot Prompting
+# Step 3: Evaluate Prompting
 # =============================================================================
+
+# PRE-COMPUTED FEW-SHOT EXAMPLES (Balanced: A, B, C, D)
+# Hardcoding these prevents reading from disk during evaluation, making it instant.
+OPTIMAL_FEW_SHOTS = [
+    {
+        "context": "The old clockmaker worked in his dusty shop. He made clocks that sang beautiful songs instead of just ticking.",
+        "question": "What did the clocks do instead of ticking?",
+        "choices": ["Sang beautiful songs", "Danced around", "Flashed lights", "Stayed silent"],
+        "answer": 0  # A
+    },
+    {
+        "context": "Once upon a time, there was a little girl named Lily. She loved to play in the garden with her dog, Max. One sunny day, Lily found a beautiful butterfly.",
+        "question": "What did Lily find in the garden?",
+        "choices": ["A flower", "A butterfly", "A bird", "A cat"],
+        "answer": 1  # B
+    },
+    {
+        "context": "Tom was a curious boy who loved to explore. One day, he found an old map in his grandfather's attic. The map showed a path to a hidden treasure in the woods behind his house.",
+        "question": "Where did Tom find the old map?",
+        "choices": ["In the basement", "In his room", "In his grandfather's attic", "In the garden"],
+        "answer": 2  # C
+    },
+    {
+        "context": "The brave firefighter climbed the tall ladder to rescue a scared kitten stuck in the tree. The crowd clapped when the kitten was safe.",
+        "question": "Who did the firefighter rescue?",
+        "choices": ["A puppy", "A little boy", "A bird", "A scared kitten"],
+        "answer": 3  # D
+    }
+]
 
 def evaluate_prompting(
     model: TransformerLM,
@@ -271,13 +300,14 @@ def evaluate_prompting(
     print("=" * 60)
     
     # Load data
+    # 1. Load the dev set (you still have to evaluate on this!)
     with open(qa_dev_path) as f:
         dev_data = json.load(f)
     
     print(f"\nValidation examples: {len(dev_data)}")
     
-    # Create pipeline
-    template = PromptTemplate(template_name="simple")
+    # 2. Use the optimal template to create pipeline
+    template = PromptTemplate(template_name="expert")
     pipeline = PromptingPipeline(
         model=model,
         tokenizer=tokenizer,
@@ -285,9 +315,12 @@ def evaluate_prompting(
         device=device,
     )
     
-    # Evaluate
+    # 3. Import and run, passing our instant OPTIMAL_FEW_SHOTS!
     from part4.prompting import evaluate_prompting as eval_prompt
-    results = eval_prompt(pipeline, dev_data)
+    results = eval_prompt(pipeline,
+                          dev_data,
+                          few_shot_examples=OPTIMAL_FEW_SHOTS,
+                          use_cot=False)
     
     print(f"\nPrompting accuracy (on fine-tuned model): {results['accuracy']:.2%}")
     print(f"Random baseline: 25.00%")

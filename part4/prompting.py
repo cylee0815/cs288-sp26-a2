@@ -5,6 +5,7 @@ Improved with true batching, Few-Shot, and Chain-of-Thought (CoT) support.
 import torch
 from torch import Tensor
 from typing import List, Dict, Any, Optional
+import re
 import sys
 from pathlib import Path
 
@@ -18,7 +19,9 @@ class PromptTemplate:
     TEMPLATES = {
         "basic": "Context: {context}\n\nQuestion: {question}\n\nChoices:\n{choices_formatted}\n\nAnswer:",
         "expert": "You are an expert reading comprehension solver. Read the passage and select the correct letter for the question.\n\nPassage: {context}\n\nQuestion: {question}\n\nChoices:\n{choices_formatted}\n\nCorrect Answer:",
-        "cot": "Context: {context}\n\nQuestion: {question}\n\nChoices:\n{choices_formatted}\n\nLet's think step by step to find the correct answer.\n\nReasoning:"
+        "cot": "Context: {context}\n\nQuestion: {question}\n\nChoices:\n{choices_formatted}\n\nLet's think step by step to find the correct answer.\n\nReasoning:",
+        # NEW: Minimalist few-shot template for smaller models
+        "few_shot_optimal": "Passage: {context}\nQuestion: {question}\nOptions:\n{choices_formatted}\nAnswer:"
     }
     
     def __init__(self, template_name: str = "basic", custom_template: Optional[str] = None, choice_format: str = "letter"):
@@ -72,7 +75,7 @@ class PromptingPipeline:
         self.template = template or PromptTemplate("basic")
         self.device = device
 
-        # MY REVISION: Dynamically grab max length from your model
+        # Dynamically grab max length from your model
         if hasattr(model, 'config'):
             self.max_length = model.config.get('context_length', 512) if isinstance(model.config, dict) else getattr(model.config, 'context_length', 512)
         else:
@@ -83,12 +86,14 @@ class PromptingPipeline:
         self._setup_choice_tokens()
     
     def _setup_choice_tokens(self):
-        """Extract exact token IDs for choices A, B, C, D to calculate probabilities."""
+        """Extract exact token IDs for choices to calculate probabilities."""
         self.choice_tokens = {}
-        for label in ["A", "B", "C", "D"]:
+        # dynamically grab the right labels based on your template's format!
+        labels = ["A", "B", "C", "D"] if self.template.choice_format == "letter" else ["1", "2", "3", "4"]
+        
+        for label in labels:
             for prefix in ["", " ", "\n"]:
                 try:
-                    # Try to encode safely depending on tokenizer API
                     token_ids = self.tokenizer.encode(prefix + label, add_special_tokens=False)
                 except TypeError:
                     token_ids = self.tokenizer.encode(prefix + label)
@@ -141,7 +146,12 @@ class PromptingPipeline:
             logits = self.model(input_tensor)[:, -1, :] # Grab the logits for the very last token
             
             for b_idx, ex in enumerate(batch_ex):
-                choice_labels = ["A", "B", "C", "D"][:len(ex["choices"])]
+                # Match the labels to the choice_format!
+                if self.template.choice_format == "letter":
+                    choice_labels = ["A", "B", "C", "D"][:len(ex["choices"])]
+                else:
+                    choice_labels = [str(j+1) for j in range(len(ex["choices"]))]
+                
                 choice_logits = [
                     logits[b_idx, self.choice_tokens[label]].item() if label in self.choice_tokens else float("-inf")
                     for label in choice_labels
@@ -207,7 +217,6 @@ class PromptingPipeline:
             padded_input_ids = [([self.pad_token_id] * (max_len - len(seq))) + seq for seq in encoded]
             
             input_tensor = torch.tensor(padded_input_ids, device=self.device)
-            attention_mask = (input_tensor != self.pad_token_id).long()
             
             # Generate the reasoning text
             output_sequences = self._generate_greedy(

@@ -7,6 +7,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 
 
@@ -482,21 +483,35 @@ def scaled_dot_product_attention(
     Returns:
         Attention output of shape (..., seq_len_q, d_v)
     """
-    d_k = Q.shape[-1]
+    ### Faster implementation:
+    # F.scaled_dot_product_attention natively expects a boolean mask where 
+    # True means "participate in attention" and False means "ignore/mask out",
+    # which perfectly matches your existing mask logic.
+    return F.scaled_dot_product_attention(
+        query=Q,
+        key=K,
+        value=V,
+        attn_mask=mask,
+        dropout_p=0.0,       # Set to >0.0 if you add dropout to your transformer later
+        is_causal=False      # We set this to False because your causal logic is 
+                             # already being passed in explicitly via the 'mask' argument
+    )
     
-    # TODO: Implement scaled dot-product attention
-    # Q @ K^T / sqrt(d_k)
-    scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(d_k)
+    # d_k = Q.shape[-1]
     
-    if mask is not None:
-        # Mask out positions with False by setting them to -infinity
-        scores = scores.masked_fill(~mask, float('-inf'))
+    # # TODO: Implement scaled dot-product attention
+    # # Q @ K^T / sqrt(d_k)
+    # scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(d_k)
+    
+    # if mask is not None:
+    #     # Mask out positions with False by setting them to -infinity
+    #     scores = scores.masked_fill(~mask, float('-inf'))
         
-    attn = softmax(scores, dim=-1)
-    # Convert any resulting NaNs to 0.0 safely
-    attn = torch.nan_to_num(attn, nan=0.0)
-    return torch.matmul(attn, V)
-    # raise NotImplementedError("Implement scaled_dot_product_attention")
+    # attn = softmax(scores, dim=-1)
+    # # Convert any resulting NaNs to 0.0 safely
+    # attn = torch.nan_to_num(attn, nan=0.0)
+    # return torch.matmul(attn, V)
+    # # raise NotImplementedError("Implement scaled_dot_product_attention")
 
 
 # =============================================================================
