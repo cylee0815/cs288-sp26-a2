@@ -326,19 +326,38 @@ class RotaryPositionEmbedding(nn.Module):
         self._precompute_cache(max_seq_len)
     
     def _precompute_cache(self, seq_len: int):
-        """Precompute cos and sin values for positions up to seq_len."""
-        # positions shape: (seq_len,)
-        positions = torch.arange(seq_len, device=self.inv_freq.device)
-        
-        # freqs shape: (seq_len, d_model // 2)
+        """
+        (Re)build cos/sin cache up to seq_len.
+        This can be called multiple times to grow cache dynamically.
+        """
+        device = self.inv_freq.device
+
+        positions = torch.arange(seq_len, device=device)
         freqs = torch.outer(positions, self.inv_freq)
-        
-        # Duplicate each frequency for the pair of dimensions
-        # emb shape: (seq_len, d_model)
         emb = torch.cat([freqs, freqs], dim=-1)
+
+        cos = torch.cos(emb)
+        sin = torch.sin(emb)
+
+        # IMPORTANT:
+        # We assign instead of register_buffer again.
+        # Re-registering buffers during training can cause issues.
+        self.cos_cached = cos
+        self.sin_cached = sin
         
-        self.register_buffer("cos_cached", torch.cos(emb), persistent=False)
-        self.register_buffer("sin_cached", torch.sin(emb), persistent=False)
+        # """Precompute cos and sin values for positions up to seq_len."""
+        # # positions shape: (seq_len,)
+        # positions = torch.arange(seq_len, device=self.inv_freq.device)
+        
+        # # freqs shape: (seq_len, d_model // 2)
+        # freqs = torch.outer(positions, self.inv_freq)
+        
+        # # Duplicate each frequency for the pair of dimensions
+        # # emb shape: (seq_len, d_model)
+        # emb = torch.cat([freqs, freqs], dim=-1)
+        
+        # self.register_buffer("cos_cached", torch.cos(emb), persistent=False)
+        # self.register_buffer("sin_cached", torch.sin(emb), persistent=False)
     
     def _rotate_half(self, x: Tensor) -> Tensor:
         """
@@ -409,23 +428,33 @@ class RotaryPositionEmbedding(nn.Module):
             x_rotated = x * cos + rotate_half(x) * sin  # (2, 8, 10, 64)
         """
         ### Faster implementation
-        # 1. Fetch and cast in a single step (removed the duplicate assignments)
-        # Casting here ensures stability for mixed precision (fp16/bf16) training
+        max_pos = token_positions.max().item()
+        current_len = self.cos_cached.size(0)
+
+        if max_pos >= current_len:
+            new_len = max_pos + 1
+            self._precompute_cache(new_len)
+
+        # -------------------------------------------------
+        # 2️⃣ Fetch cos/sin
+        # -------------------------------------------------
         cos = self.cos_cached[token_positions].to(dtype=x.dtype)
         sin = self.sin_cached[token_positions].to(dtype=x.dtype)
-        
-        # 2. Fast Dimension Alignment using None indexing (equivalent to unsqueeze)
-        # If token_positions is 1D (seq_len,), add batch dimension -> (1, seq_len, d_k)
+
+        # -------------------------------------------------
+        # 3️⃣ Align dimensions
+        # -------------------------------------------------
         if token_positions.dim() == 1:
             cos = cos[None, ...]
             sin = sin[None, ...]
-            
-        # If x is 4D (batch, heads, seq_len, d_k), add heads dimension -> (batch, 1, seq_len, d_k)
+
         if x.dim() == 4:
             cos = cos[:, None, :, :]
             sin = sin[:, None, :, :]
-            
-        # 3. Apply rotation
+
+        # -------------------------------------------------
+        # 4️⃣ Apply rotation
+        # -------------------------------------------------
         return (x * cos) + (self._rotate_half(x) * sin)
 
         # # TODO: Implement RoPE forward pass
