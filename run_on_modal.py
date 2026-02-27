@@ -20,7 +20,7 @@ output_volume = modal.Volume.from_name("experiment-outputs", create_if_missing=T
 # 4. Define the remote function
 @app.function(
     image=image,
-    gpu="H100",
+    gpu="A100",
     cpu=8.0,
     timeout=14400,    
     # mounts=[...] is completely removed!
