@@ -264,10 +264,10 @@ def compute_qa_loss(batch: Dict[str, torch.Tensor], model: nn.Module, device: st
     input_ids = batch["input_ids"].to(device)
     attention_mask = batch["attention_mask"].to(device)
     labels = batch["labels"].to(device)
-    print("input_ids:", input_ids.shape)
-    print("labels:", labels.shape)
+    # print("input_ids:", input_ids.shape)
+    # print("labels:", labels.shape)
     logits = model(input_ids, attention_mask)
-    print("logits:", logits.shape)
+    # print("logits:", logits.shape)
     return cross_entropy(logits, labels)
 
 
